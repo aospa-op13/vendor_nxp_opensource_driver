@@ -48,6 +48,9 @@
 #include <linux/compat.h>
 #endif
 #include "common.h"
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+#include "nfc_vbat_monitor.h"
+//#endif CONFIG_NXP_NFC_VBAT_MONITOR
 
 /**
  * i2c_disable_irq()
@@ -152,6 +155,16 @@ int i2c_read(struct nfc_dev *nfc_dev, char *buf, size_t count, int timeout)
 					}
 				}
 			}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+			if (nfc_dev->nfc_vbat_monitor.vbat_monitor_status) {
+				pr_debug("%s: NFC recovering  state\n",
+					 __func__);
+				nfc_dev->nfc_vbat_monitor.vbat_monitor_status =
+					false;
+				ret = -EREMOTEIO;
+				goto err;
+			}
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 			i2c_disable_irq(nfc_dev);
 
 			if (gpio_get_value(nfc_gpio->irq))
@@ -414,6 +427,13 @@ int nfc_i2c_dev_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		pr_err("NxpDrv: %s: request_irq failed\n", __func__);
 		goto err_nfc_misc_unregister;
 	}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	ret = nfc_vbat_monitor_init(nfc_dev, nfc_gpio, client);
+	if (ret) {
+		pr_err("%s: nfcc vbat monitor init failed, ret: %d\n", __func__, ret);
+		//goto err_nfc_misc_unregister;
+	}
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	i2c_disable_irq(nfc_dev);
 
 	ret = nfc_ldo_config(&client->dev, nfc_dev);
@@ -501,6 +521,11 @@ int nfc_i2c_dev_remove(struct i2c_client *client)
 
 	device_init_wakeup(&client->dev, false);
 	free_irq(client->irq, nfc_dev);
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	if (gpio_is_valid(nfc_dev->nfc_vbat_monitor.irq_num)) {
+    	free_irq(nfc_dev->nfc_vbat_monitor.irq_num, nfc_dev);
+	}
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	nfc_misc_unregister(nfc_dev, DEV_COUNT);
 	mutex_destroy(&nfc_dev->dev_ref_mutex);
 	mutex_destroy(&nfc_dev->read_mutex);
@@ -532,6 +557,13 @@ int nfc_i2c_dev_suspend(struct device *device)
 		if (!enable_irq_wake(client->irq))
 			i2c_dev->irq_wake_up = true;
 	}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+    if (gpio_is_valid(nfc_dev->nfc_vbat_monitor.irq_num)) {
+        if (enable_irq_wake(nfc_dev->nfc_vbat_monitor.irq_num) != 0) {
+            pr_err("%s: vbat irq wake enabled failed\n", __func__);
+        }
+    }
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	pr_debug("NxpDrv: %s: irq_wake_up = %d", __func__, i2c_dev->irq_wake_up);
 	return 0;
 }
@@ -554,6 +586,13 @@ int nfc_i2c_dev_resume(struct device *device)
 		if (!disable_irq_wake(client->irq))
 			i2c_dev->irq_wake_up = false;
 	}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+    if (gpio_is_valid(nfc_dev->nfc_vbat_monitor.irq_num)) {
+        if (disable_irq_wake(nfc_dev->nfc_vbat_monitor.irq_num) != 0) {
+            pr_err("%s: vbat irq wake disabled failed\n", __func__);
+        }
+    }
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	pr_debug("NxpDrv: %s: irq_wake_up = %d", __func__, i2c_dev->irq_wake_up);
 	return 0;
 }

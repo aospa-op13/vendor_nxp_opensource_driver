@@ -23,8 +23,10 @@ def define_modules(target, variant):
                 "nfc/common_qcom.c",
                 "nfc/ese_cold_reset.c",
                 "nfc/i2c_drv.c",
+                "nfc/nfc_vbat_monitor.c",
                 "nfc/common.h",
                 "nfc/common_nxp.h",
+                "nfc/nfc_vbat_monitor.h",
                 "nfc/ese_cold_reset.h",
                 "nfc/i2c_drv.h"
                ],

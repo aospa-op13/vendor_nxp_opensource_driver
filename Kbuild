@@ -19,3 +19,7 @@ nxp-nci-objs += nfc/ese_cold_reset.o \
 		nfc/common_qcom.o \
 		nfc/i2c_drv.o
 
+#ifdef CONFIG_NXP_NFC_VBAT_MONITOR
+nxp-nci-objs += nfc/nfc_vbat_monitor.o
+ccflags-y += -DCONFIG_NXP_NFC_VBAT_MONITOR
+#endif

@@ -63,6 +63,7 @@
 #define DL_GET_SESSION_CMD_CRC_2		(0x33)
 #define GET_SESSION_STS_OFF             (3)
 #define NFCC_SESSION_STS_CLOSED         (0x0)
+#define NFC_GPIO_SET_WAIT_TIME_US              (20000)
 
 /* Below offsets should be subtracted from NCI header length + payload length */
 
