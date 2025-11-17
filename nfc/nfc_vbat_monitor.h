@@ -42,6 +42,7 @@ struct nfc_vbat_monitor {
 /* vbat monitoring handling and workqueue functions*/
 irqreturn_t nfc_vbat_monitor_irq_handler(int irq, void *dev_id);
 int nfc_vbat_monitor_init_workqueue(struct nfc_vbat_monitor *nfc_vbat_monitor);
+int read_battery_capacity(void);
 
 #endif /* _NFC_VBAT_MONITOR_H_ */
 //#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */

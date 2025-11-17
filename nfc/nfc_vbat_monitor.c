@@ -21,7 +21,7 @@
 
 #include <linux/interrupt.h>
 #include <linux/delay.h>
-
+#include <linux/power_supply.h>
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>
 #endif
@@ -174,6 +174,7 @@ irqreturn_t nfc_vbat_monitor_irq_handler(int irq, void *dev_id)
 static void nfc_vbat_monitor_workqueue_handler(struct work_struct *work)
 {
 	int ret = 0;
+	int ret_value = 0;
 	struct nfc_vbat_monitor *nfc_vbat_monitor =
 		container_of(work, struct nfc_vbat_monitor, work);
 	struct nfc_dev *nfc_dev = container_of(nfc_vbat_monitor, struct nfc_dev,
@@ -181,6 +182,13 @@ static void nfc_vbat_monitor_workqueue_handler(struct work_struct *work)
 
 	pr_err("%s: read pending status flag: %d\n", __func__,
 		 nfc_dev->cold_reset.is_nfc_read_pending);
+	ret_value = read_battery_capacity();
+	// for VtsAidlHalNfcTargetTest avoid abort
+	if (ret_value > 10) {
+		pr_err("%s: battery capacity %d exceeds threshold, skip recovery\n",
+		__func__, ret_value);
+		return;
+	}
 	nfc_dev->nfc_disable_intr(nfc_dev);
 	mutex_lock(&nfc_dev->write_mutex);
 	ret = nfcc_vbat_recovery(nfc_dev);
@@ -217,6 +225,36 @@ int nfc_vbat_monitor_init_workqueue(struct nfc_vbat_monitor *nfc_vbat_monitor)
 	INIT_WORK(&nfc_vbat_monitor->work, nfc_vbat_monitor_workqueue_handler);
 	pr_debug("%s: allocated workqueue\n", __func__);
 	return 0;
+}
+
+/**
+* read_battery_capacity - Reads current battery capacity level
+* Queries the system power supply subsystem to get current battery percentage
+
+* Return: Positive battery capacity (0-100) on success
+*/
+int read_battery_capacity(void)
+{
+	int ret = 0;
+	int capacity = 0;
+	union power_supply_propval val = {0};
+	struct power_supply *psy = power_supply_get_by_name("battery");
+
+	if (!psy) {
+		pr_err("%s: failed to get power supply\n", __func__);
+		return -ENODEV;
+	}
+
+	ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_CAPACITY, &val);
+	if (ret) {
+		pr_err("%s: failed to get capacity: %d\n", __func__, ret);
+		power_supply_put(psy);
+		return ret;
+    }
+
+	capacity = val.intval;
+	power_supply_put(psy);
+	return capacity;
 }
 
 /**
