@@ -9,3 +9,4 @@
  ***************************************************************************/
 
 #define CONFIG_NXP_NFC_I2C 1
+#define CONFIG_NXP_NFC_VBAT_MONITOR 1

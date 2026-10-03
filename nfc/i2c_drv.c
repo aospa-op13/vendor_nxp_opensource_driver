@@ -44,10 +44,28 @@
 #include <linux/delay.h>
 #include <linux/uaccess.h>
 #include <linux/gpio.h>
+#include <linux/of_gpio.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/pinctrl/devinfo.h>
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>
 #endif
 #include "common.h"
+#include <soc/oplus/boot/boot_mode.h>
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+#include "nfc_vbat_monitor.h"
+//#endif CONFIG_NXP_NFC_VBAT_MONITOR
+
+#define MIXED_CHIPSET    "mixed-chipset"
+#define MAX_ID_COUNT     5
+#define SUPPORT_MIXED_CHIPSET     1
+#define NOT_SUPPORT_MIXED_CHIPSET     0
+#define SUPPORT_CHIPSET_LIST     "SN100T|SN110T|SN220T|SN220U|SN220P|SN220E|PN560|PN560DZ"
+
+struct id_entry {
+    u32 key;
+    const char *chipset;
+};
 
 /**
  * i2c_disable_irq()
@@ -152,6 +170,16 @@ int i2c_read(struct nfc_dev *nfc_dev, char *buf, size_t count, int timeout)
 					}
 				}
 			}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+			if (nfc_dev->nfc_vbat_monitor.vbat_monitor_status) {
+				pr_debug("%s: NFC recovering  state\n",
+					 __func__);
+				nfc_dev->nfc_vbat_monitor.vbat_monitor_status =
+					false;
+				ret = -EREMOTEIO;
+				goto err;
+			}
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 			i2c_disable_irq(nfc_dev);
 
 			if (gpio_get_value(nfc_gpio->irq))
@@ -336,6 +364,296 @@ static const struct file_operations nfc_i2c_dev_fops = {
 #endif
 };
 
+
+
+static int nxp_nfc_read_id_properties(struct device_node *np, u32 id_count, struct id_entry *id_entries)
+{
+    int err;
+    u32 i;
+    char propname[30];
+
+    for (i = 0; i < id_count; i++) {
+        snprintf(propname, sizeof(propname), "id-%u-key", i);
+        err = of_property_read_u32(np, propname, &id_entries[i].key);
+        if (err) {
+          pr_err("Failed to read dts node:%s\n",propname);
+          return err;
+        }
+
+        snprintf(propname, sizeof(propname), "id-%u-value-chipset", i);
+        err = of_property_read_string(np, propname, &id_entries[i].chipset);
+        if (err) {
+          pr_err("Failed to read dts node:%s\n",propname);
+          return err;
+        }
+    }
+    pr_info("nxp_nfc_read_id_properties success");
+    return 0;
+}
+
+static int nxp_nfc_get_gpio_value(struct device_node *np, int *gpio_value)
+{
+    int gpio_num = of_get_named_gpio(np, "id-gpio", 0);
+
+    if (!gpio_is_valid(gpio_num)) {
+        pr_err("id-gpio is not valid\n");
+        return -EINVAL;
+    }
+
+    *gpio_value = gpio_get_value(gpio_num);
+    pr_info("%s, id gpio value is %d", __func__, *gpio_value);
+    return 0;
+}
+static int nxp_nfc_set_gpio_state_and_read(struct pinctrl *pinctrl, struct pinctrl_state *state, int gpio_num, int *gpio_value)
+{
+    int ret = 0;
+
+    /*  Select pinctrl state */
+    ret = pinctrl_select_state(pinctrl, state);
+    if (ret) {
+        pr_err("Failed to select pinctrl state\n");
+        return ret;
+    }
+
+    /* Read GPIO value */
+    *gpio_value = gpio_get_value(gpio_num);
+    return 0;
+}
+
+static int nxp_nfc_get_gpio_value_three(struct device *dev, int *gpio_value)
+{
+    int ret = -1, default_ret = -1, value_down = -1, value_up = -1;
+    struct pinctrl *pinctrl = NULL;
+    struct pinctrl_state *default_state = NULL, *pullup_state = NULL, *pulldown_state = NULL;
+
+    int gpio_num = of_get_named_gpio(dev->of_node, "id-gpio", 0);
+
+    pr_info("%s, gpio_num = %d\n", __func__, gpio_num);
+
+    if (!gpio_is_valid(gpio_num)) {
+        pr_err("%s, id-gpio is not valid\n", __func__);
+        return -EINVAL;
+    }
+
+    ret = gpio_request(gpio_num, "id-gpio");
+    if (ret < 0) {
+        pr_err("%s, failed to request id-gpio, error_code=%d\n", __func__, ret);
+        return ret;
+    }
+    pr_info("%s, id-gpio = %d\n", __func__, gpio_num);
+    ret = gpio_direction_input(gpio_num);
+    if (ret < 0) {
+        pr_err("%s, failed to set id-gpio direction to input, error_code=%d\n", __func__, ret);
+        goto free_gpio;
+    }
+
+    pinctrl = devm_pinctrl_get(dev);
+    if (IS_ERR(pinctrl)) {
+        pr_err("pinctrl init fail: %ld\n", PTR_ERR(pinctrl));
+            ret = PTR_ERR(pinctrl);
+        goto free_gpio;
+    }
+
+    default_state = pinctrl_lookup_state(pinctrl, "nfcid_default");
+    pullup_state = pinctrl_lookup_state(pinctrl, "nfcid_pullup");
+    pulldown_state = pinctrl_lookup_state(pinctrl, "nfcid_pulldown");
+    if (IS_ERR(default_state) || IS_ERR(pullup_state) || IS_ERR(pulldown_state)) {
+        pr_err("pinctrl state lookup fail: default_state=%ld, pullup_state=%ld, pulldown_state=%ld\n",
+        PTR_ERR(default_state), PTR_ERR(pullup_state), PTR_ERR(pulldown_state));
+
+        if (IS_ERR(default_state))
+            ret = PTR_ERR(default_state);
+        else if (IS_ERR(pullup_state))
+            ret = PTR_ERR(pullup_state);
+        else
+            ret = PTR_ERR(pulldown_state);
+
+        goto put_pinctrl;
+    }
+
+    /*  Read the GPIO value in the pull-down state  */
+    ret = nxp_nfc_set_gpio_state_and_read(pinctrl, pulldown_state, gpio_num, &value_down);
+    pr_info("%s, id-gpio value_down is %d", __func__, value_down);
+    if (ret) {
+        pr_err("Failed to read GPIO in pulldown state\n");
+        goto restore_default;
+    }
+
+    /* Read the GPIO value in pull-up state */
+    ret = nxp_nfc_set_gpio_state_and_read(pinctrl, pullup_state, gpio_num, &value_up);
+    pr_info("%s, id-gpio value_up is %d", __func__, value_up);
+    if (ret) {
+        pr_err("Failed to read GPIO in pullup state\n");
+        goto restore_default;
+    }
+
+    /* Determine the GPIO status based on the read value */
+    if (value_down == 0 && value_up == 1) {
+        pr_info("%s, High resistance state\n", __func__);
+        *gpio_value = 2; /* High resistance state */
+        pr_info("%s, id-gpio value is %d", __func__, *gpio_value);
+    } else if (value_down == 0 && value_up == 0) {
+        pr_info("%s, External pulldown state\n", __func__);
+        *gpio_value = 0; /* External pulldown state */
+        pr_info("%s, id-gpio value is %d", __func__, *gpio_value);
+    } else if (value_down == 1 && value_up == 1) {
+        pr_info("%s, External pullup state\n", __func__);
+        *gpio_value = 1; /* External pullup state */
+        pr_info("%s, id-gpio value is %d", __func__, *gpio_value);
+    } else {
+        pr_err("Unknown GPIO state: value_down = %d, value_up = %d\n", value_down, value_up);
+        ret = -1;
+        goto restore_default;
+    }
+
+    pr_info("%s, final gpio_value = %d\n", __func__, *gpio_value);
+    ret = 0;
+
+restore_default:
+    /* Restore to default state */
+    default_ret = pinctrl_select_state(pinctrl, default_state);
+    if (default_ret) {
+        pr_err("Failed to select default pinctrl state: default_ret = %d\n", default_ret);
+    }
+
+put_pinctrl:
+    if (pinctrl) {
+        devm_pinctrl_put(pinctrl);
+    }
+
+free_gpio:
+    gpio_free(gpio_num);
+
+    return ret;
+}
+
+static int checkNfcChip(struct device *dev)
+{
+    struct device_node *np = NULL;
+    u32 id_count;
+    int i, gpio_value, err;
+    bool found = false;
+    struct id_entry *id_entries = NULL;
+    uint32_t mixed_chipset;
+
+    if (NULL == dev)
+    {
+        pr_err("%s dev is NULL", __func__);
+        return -ENOENT;
+    }
+
+    np = dev->of_node;
+
+    if (NULL == np)
+    {
+        pr_err("%s dev->of_node is NULL", __func__);
+        return -ENOENT;
+    }
+
+    if (of_property_read_u32(np, MIXED_CHIPSET, &mixed_chipset))
+    {
+        pr_info("%s, read dts property mixed-chipset failed", __func__);
+        return 0;
+    }
+    else
+    {
+        if (SUPPORT_MIXED_CHIPSET == mixed_chipset)
+        {
+            pr_info("%s, the value of dts property mixed-chipset is 1(true)", __func__);
+
+            err = of_property_read_u32(np, "id_count", &id_count);
+            if (err)
+            {
+                pr_err("%s read dts property id_count failed", __func__);
+                return err;
+            }
+
+            if (id_count >= MAX_ID_COUNT)
+            {
+                pr_err("%s error: id_count is more than %d", __func__, MAX_ID_COUNT);
+                return -ENOENT;
+            }
+
+            id_entries = kzalloc(sizeof(struct id_entry) * id_count, GFP_DMA | GFP_KERNEL);
+            if(NULL == id_entries)
+            {
+                pr_err("%s error: can not kzalloc memory for id_entry", __func__);
+                return -ENOMEM;
+            }
+
+            err = nxp_nfc_read_id_properties(np, id_count,id_entries);
+            if (err)
+            {
+                pr_err("%s error: nxp_nfc_read_id_properties failed", __func__);
+                kfree(id_entries);
+                return err;
+            }
+
+            pr_info("id_count: %u\n", id_count);
+            switch (id_count) {
+                case 2:
+                    err = nxp_nfc_get_gpio_value(np, &gpio_value);
+                    break;
+                case 3:
+                    err = nxp_nfc_get_gpio_value_three(dev, &gpio_value);
+                    break;
+                default:
+                    pr_err("Unexpected id_count value: %u\n", id_count);
+                    break;
+            }
+            if (err)
+            {
+                pr_err("%s error: get_gpio_value failed", __func__);
+                kfree(id_entries);
+                return err;
+            }
+
+            for (i = 0; i < id_count; i++)
+            {
+                if (id_entries[i].key == gpio_value)
+                {
+                    if (strstr(SUPPORT_CHIPSET_LIST, id_entries[i].chipset) == NULL)
+                    {
+                        pr_err("%s this nfc chipset:%s does not correspond to this nfc driver", __func__, id_entries[i].chipset);
+                        err = -EINVAL;
+                        kfree(id_entries);
+                        return err;
+                    }
+
+                    pr_debug("%s this nfc chipset:%s corresponds to this nfc driver", __func__, id_entries[i].chipset);
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                pr_err("%s no matching key found for GPIO value\n", __func__);
+                err = -EINVAL;
+                kfree(id_entries);
+                return err;
+            }
+
+            pr_info("%s checkNfcChip success\n", __func__);
+            kfree(id_entries);
+            return 0;
+
+        }
+        else if (NOT_SUPPORT_MIXED_CHIPSET == mixed_chipset)
+        {
+            pr_info("%s, the value of dts property mixed-chipset is 0(false)", __func__);
+            return 0;
+        }
+        else
+        {
+            pr_err("%s, mixed-chipset's value is wrong,it is neither 1 nor 0", __func__);
+            return -ENOENT;
+        }
+    }
+}
+
+
+
 #if  (KERNEL_VERSION(6, 3, 0) <= LINUX_VERSION_CODE)
 int nfc_i2c_dev_probe(struct i2c_client *client)
 #else
@@ -348,6 +666,13 @@ int nfc_i2c_dev_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	struct platform_configs *nfc_configs = NULL;
 	struct platform_gpio *nfc_gpio = NULL;
 	pr_debug("NxpDrv: %s: enter\n", __func__);
+
+	ret = checkNfcChip(&client->dev);
+	if (ret) {
+		pr_err("NxpDrv: %s: failed to checkNfcChip\n", __func__);
+		goto err;
+	}
+
 	nfc_dev = kzalloc(sizeof(struct nfc_dev), GFP_KERNEL);
 	if (nfc_dev == NULL) {
 		ret = -ENOMEM;
@@ -414,6 +739,13 @@ int nfc_i2c_dev_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		pr_err("NxpDrv: %s: request_irq failed\n", __func__);
 		goto err_nfc_misc_unregister;
 	}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	ret = nfc_vbat_monitor_init(nfc_dev, nfc_gpio, client);
+	if (ret) {
+		pr_err("%s: nfcc vbat monitor init failed, ret: %d\n", __func__, ret);
+		//goto err_nfc_misc_unregister;
+	}
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	i2c_disable_irq(nfc_dev);
 
 	ret = nfc_ldo_config(&client->dev, nfc_dev);
@@ -443,6 +775,12 @@ int nfc_i2c_dev_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	i2c_set_clientdata(client, nfc_dev);
 	i2c_dev->irq_wake_up = false;
 	nfc_dev->is_ese_session_active = false;
+
+	dev_err(&client->dev,"%s: get boot mode = %d \n", __func__, get_boot_mode());
+	if(get_boot_mode() == MSM_BOOT_MODE__FACTORY){
+		dev_err(&client->dev,"%s: enter ftm mode, set ven = 0\n", __func__);
+		gpio_set_ven(nfc_dev, 0);
+	}
 
 	pr_info("NxpDrv: %s: probing nfc i2c success\n", __func__);
 	return 0;
@@ -501,6 +839,11 @@ int nfc_i2c_dev_remove(struct i2c_client *client)
 
 	device_init_wakeup(&client->dev, false);
 	free_irq(client->irq, nfc_dev);
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	if (gpio_is_valid(nfc_dev->nfc_vbat_monitor.irq_num)) {
+    	free_irq(nfc_dev->nfc_vbat_monitor.irq_num, nfc_dev);
+	}
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	nfc_misc_unregister(nfc_dev, DEV_COUNT);
 	mutex_destroy(&nfc_dev->dev_ref_mutex);
 	mutex_destroy(&nfc_dev->read_mutex);
@@ -532,6 +875,13 @@ int nfc_i2c_dev_suspend(struct device *device)
 		if (!enable_irq_wake(client->irq))
 			i2c_dev->irq_wake_up = true;
 	}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+    if (gpio_is_valid(nfc_dev->nfc_vbat_monitor.irq_num)) {
+        if (enable_irq_wake(nfc_dev->nfc_vbat_monitor.irq_num) != 0) {
+            pr_err("%s: vbat irq wake enabled failed\n", __func__);
+        }
+    }
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	pr_debug("NxpDrv: %s: irq_wake_up = %d", __func__, i2c_dev->irq_wake_up);
 	return 0;
 }
@@ -554,6 +904,13 @@ int nfc_i2c_dev_resume(struct device *device)
 		if (!disable_irq_wake(client->irq))
 			i2c_dev->irq_wake_up = false;
 	}
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+    if (gpio_is_valid(nfc_dev->nfc_vbat_monitor.irq_num)) {
+        if (disable_irq_wake(nfc_dev->nfc_vbat_monitor.irq_num) != 0) {
+            pr_err("%s: vbat irq wake disabled failed\n", __func__);
+        }
+    }
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	pr_debug("NxpDrv: %s: irq_wake_up = %d", __func__, i2c_dev->irq_wake_up);
 	return 0;
 }

@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/delay.h>
 #include <linux/pinctrl/qcom-pinctrl.h>
+#include <linux/interrupt.h>
 #include "common.h"
 bool secure_peripheral_not_found = true;
 
@@ -55,7 +56,18 @@ int nfc_parse_dt(struct device *dev, struct platform_configs *nfc_configs,
 			       nfc_gpio->irq);
 			return nfc_gpio->irq;
 		}
-		pr_info("NxpDrv: %s: irq %d\n", __func__, nfc_gpio->irq);
+		pr_err("NxpDrv: %s: irq %d\n", __func__, nfc_gpio->irq);
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+		nfc_gpio->vbat_irq = -EINVAL;
+		nfc_gpio->vbat_irq =
+			of_get_named_gpio(np, DTS_NFC_VBAT_MONITOR_STR, 0);
+		if ((!gpio_is_valid(nfc_gpio->vbat_irq))) {
+		pr_err("%s: vbat_irq gpio invalid %d\n", __func__,
+			       nfc_gpio->vbat_irq);
+			//return nfc_gpio->vbat_irq;
+		}
+		pr_err("%s: vbat gpio %d\n", __func__, nfc_gpio->vbat_irq);
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	}
 	nfc_gpio->ven = of_get_named_gpio(np, DTS_VEN_GPIO_STR, 0);
 	if ((!gpio_is_valid(nfc_gpio->ven))) {
@@ -83,7 +95,7 @@ int nfc_parse_dt(struct device *dev, struct platform_configs *nfc_configs,
 	}else
 		nfc_configs->CNSS_NFC_HW_SECURE_ENABLE = true;
 #endif
-	pr_info("NxpDrv: %s: irq %d, ven %d, dwl %d, clkreq %d \n", __func__, nfc_gpio->irq, nfc_gpio->ven,
+	pr_err("NxpDrv: %s: irq %d, ven %d, dwl %d, clkreq %d \n", __func__, nfc_gpio->irq, nfc_gpio->ven,
 		nfc_gpio->dwl_req, nfc_gpio->clkreq);
 
 	/* optional property */
@@ -216,6 +228,11 @@ void gpio_free_all(struct nfc_dev *nfc_dev)
 
 	if (gpio_is_valid(nfc_gpio->irq))
 		gpio_free(nfc_gpio->irq);
+
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	if (gpio_is_valid(nfc_gpio->vbat_irq))
+		gpio_free(nfc_gpio->vbat_irq);
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 
 	if (gpio_is_valid(nfc_gpio->ven))
 		gpio_free(nfc_gpio->ven);

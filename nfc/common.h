@@ -32,6 +32,7 @@
 #include <nfcinfo.h>
 #include <sn_uapi.h>
 #include "i2c_drv.h"
+#include "nfc_vbat_monitor.h"
 #include "ese_cold_reset.h"
 
 #ifdef NFC_SECURE_PERIPHERAL_ENABLED
@@ -91,12 +92,16 @@
 #define MAX_RETRY_COUNT			(3)
 #define MAX_WRITE_IRQ_COUNT		(5)
 #define MAX_IRQ_WAIT_TIME		(90)
-#define WAKEUP_SRC_TIMEOUT		(100)
+#define WAKEUP_SRC_TIMEOUT		(500)
 
 /* command response timeout */
 #define NCI_CMD_RSP_TIMEOUT_MS		(2000)
 /* Time to wait for NFCC to be ready again after any change in the GPIO */
-#define NFC_GPIO_SET_WAIT_TIME_US	(10000)
+/* #ifdef OPLUS_BUG_STABILITY */
+/* #define NFC_GPIO_SET_WAIT_TIME_US	(10000) */
+/* #else OPLUS_BUG_STABILITY */
+#define NFC_GPIO_SET_WAIT_TIME_US	(20000)
+/* #endif OPLUS_BUG_STABILITY */
 /* Time to wait before retrying writes */
 #define WRITE_RETRY_WAIT_TIME_US	(3000)
 /* Time to wait before retrying read for some specific usecases */
@@ -226,6 +231,9 @@ enum gpio_values {
 /* NFC GPIO variables */
 struct platform_gpio {
 	unsigned int irq;
+	//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	unsigned int vbat_irq;
+	//#endif CONFIG_NXP_NFC_VBAT_MONITOR
 	unsigned int ven;
 	unsigned int clkreq;
 	unsigned int dwl_req;
@@ -277,6 +285,9 @@ struct nfc_dev {
 	};
 	struct platform_configs configs;
 	struct cold_reset cold_reset;
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+	struct nfc_vbat_monitor nfc_vbat_monitor;
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 	struct regulator *reg;
 
 	/* read buffer*/
@@ -331,4 +342,9 @@ int validate_nfc_state_nci(struct nfc_dev *nfc_dev);
 int nfc_post_init(struct nfc_dev *nfc_dev);
 int nfc_dynamic_protection_ioctl(struct nfc_dev *nfc_dev, unsigned long sec_zone_trans);
 bool nfc_hw_secure_check(void);
+//#if IS_ENABLED(CONFIG_NXP_NFC_VBAT_MONITOR)
+int nfc_vbat_monitor_init(struct nfc_dev *nfc_dev,
+			  struct platform_gpio *nfc_gpio,
+			  struct i2c_client *client);
+//#endif /* CONFIG_NXP_NFC_VBAT_MONITOR */
 #endif /* _COMMON_H_ */
